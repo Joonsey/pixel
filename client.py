@@ -2,10 +2,11 @@ import os
 import socket
 import threading
 import random
+import logging
 from typing import Any, Optional
 
-import packets
 import settings
+import packets
 
 
 class Client:
@@ -18,6 +19,7 @@ class Client:
         self.die: bool = False
         self.auth_id: int = 0
         self.username = username
+        self.map: list[list[str]]
 
 
     @property
@@ -25,14 +27,14 @@ class Client:
         return self.auth_id != 0 and self.udp_socket != None
 
 
-    def _disconnect(self, disconnect_type: packets.DisconnectEnum = packets.DisconnectEnum.UNEXPECTED) -> None:
-        self.tcp_socket.send(
-            packets.Packet(
+    def disconnect(self, disconnect_type: packets.DisconnectEnum = packets.DisconnectEnum.UNEXPECTED) -> None:
+        packet_bytes = packets.Packet(
                 packets.PacketType.DISCONNECT,
                 self.auth_id,
                 packets.PayloadFormat.DISCONNECT.pack(disconnect_type)
             ).serialize()
-        )
+
+        self.tcp_socket.sendall(packet_bytes)
         self.udp_socket = None
         self.die = True
 
@@ -62,23 +64,37 @@ class Client:
         return False
 
 
+    def _build_map_from_payload(self, payload: bytes) -> list[list[str]]:
+        rows = payload.decode()
+        rows = [rows[i:i+settings.MAP_LENGTH] for i in range(0, len(rows), settings.MAP_LENGTH)]
+        map_data: list[list[str]] = []
+
+        for row in rows:
+            map_data.append([*row])
+
+        return map_data
+
+
     def _handle_tcp(self, data: bytes) -> None:
 
-        # potential chat integration?
-        pass
+        packet = packets.Packet.deserialize(data)
+
+        if packet.packet_type == packets.PacketType.MAP_DATA:
+            self.map = self._build_map_from_payload(packet.payload)
+            logging.info(f"got map data:\n{self.map}")
 
 
     def _handle_udp(self, data: bytes, addr: Any) -> None:
 
         packet = packets.Packet.deserialize(data)
-        print(packet.auth_id, packet.payload)
+        #print(packet.auth_id, packet.payload)
 
 
     def _start_udp(self) -> None:
         def run():
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
 
-                print("udp server up")
+                logging.info("starting udp server")
                 self.udp_socket = s
 
                 while True:
@@ -94,7 +110,7 @@ class Client:
 
     def send_packet(self, packet: packets.Packet) -> None:
         if not self.authenticated or self.udp_socket == None:
-            print("not authenticated! packets are being dropped")
+            logging.error("not authenticated! packets are being dropped")
         else:
             self.udp_socket.sendto(packet.serialize(), (self.host, self.udp_port))
 
@@ -103,24 +119,19 @@ class Client:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             self.tcp_socket = s
             if not self._start_connection_and_authenticate(s):
-                self._disconnect(packets.DisconnectEnum.EXPECTED)
+                self.disconnect(packets.DisconnectEnum.EXPECTED)
                 return
 
             self._start_udp()
 
-            try:
-                while True:
-                    data = s.recv(1024)
-                    if not data:
-                        self.die = True
-                        break
+            while True:
+                data = s.recv(1024)
+                if not data:
+                    self.die = True
+                    break
 
-                    self._handle_tcp(data)
-            except KeyboardInterrupt as _:
-                self._disconnect(packets.DisconnectEnum.EXPECTED)
+                self._handle_tcp(data)
 
-            except Exception as _:
-                self._disconnect()
 
     def start(self) -> None:
         threading.Thread(target=self.tcp_connection, daemon=True).start()
@@ -130,13 +141,19 @@ class Client:
 if __name__ == "__main__":
     client = Client(settings.HOST, int(settings.TCP_PORT), int(settings.UDP_PORT))
 
-    threading.Thread(target=client.start, daemon=True).start()
-    while True:
-        if client.authenticated:
-            client.send_packet(
-                packets.Packet(
-                    packets.PacketType.MOVE,
-                    client.auth_id,
-                    packets.PayloadFormat.MOVE.pack(random.randint(0, 50), random.randint(0, 50))
-            ))
+    client.start()
+    try:
+        while True:
+            if client.authenticated:
+                client.send_packet(
+                    packets.Packet(
+                        packets.PacketType.MOVE,
+                        client.auth_id,
+                        packets.PayloadFormat.MOVE.pack(random.randint(0, 50), random.randint(0, 50))
+                ))
+    except KeyboardInterrupt as _:
+        client.disconnect(packets.DisconnectEnum.EXPECTED)
+
+    except Exception as _:
+        client.disconnect()
 

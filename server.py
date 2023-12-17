@@ -2,17 +2,37 @@ import os
 import socket
 import threading
 import random
+import logging
+
+from dataclasses import dataclass
 from typing import Any
 
 import settings
 import packets
 
+@dataclass
+class Connection:
+    socket: socket.socket
+    auth_id: int
+    pos: tuple[float, float]
 
 class TCPServer:
     def __init__(self, host: str, port: int) -> None:
         self.host = host
         self.port = port
-        self.connections: dict[int, socket.socket] = {}
+        self.connections: dict[int, Connection] = {}
+        self.map: list[list[str]]
+
+        self.map = self._generate_map()
+
+
+    def _generate_map(self) -> list[list[str]]:
+        data = []
+        with open('map', 'r') as f:
+            for line in f.readlines():
+                data.append(line.split(','))
+
+        return data
 
 
     def _authenticate(self, conn: socket.socket) -> bool:
@@ -30,8 +50,25 @@ class TCPServer:
                 packets.PayloadFormat.JOIN_RESPONSE.pack(auth_id)
             ).serialize()
         )
-        self.connections[auth_id] = conn
+        self.connections[auth_id] = Connection(conn, auth_id, (0,0))
         return True
+
+
+    def _onboard_client(self, conn: socket.socket) -> None:
+        conn.send(
+            packets.Packet(
+                packets.PacketType.MAP_DATA,
+                list(filter(lambda x: x.socket == conn, self.connections.values()))[0].auth_id,
+                packets.PayloadFormat.MAP_DATA.pack(self._get_map_data())
+            ).serialize()
+        )
+
+
+    def _get_map_data(self) -> bytes:
+        map_bytes = b"".join("".join(x).encode() for x in self.map)
+        map_bytes = map_bytes.replace(b'\n', b'')
+        logging.info(map_bytes)
+        return map_bytes
 
 
     def _generate_auth_id(self) -> int:
@@ -43,7 +80,7 @@ class TCPServer:
 
 
     def _disconnect_connection_by_auth_id(self, auth_id: int) -> None:
-        print('disconnecting', self.connections[auth_id])
+        logging.info(f'{auth_id} disconnected')
         self.connections.pop(auth_id)
 
 
@@ -60,12 +97,14 @@ class TCPServer:
             s.listen()
             while True:
                 conn, addr = s.accept()
-                print('connection request by', addr)
+                logging.info(f'connection request by {addr}')
                 with conn:
                     if not self._authenticate(conn):
                         break
 
-                    print(addr, "authorized!")
+                    self._onboard_client(conn)
+
+                    logging.info(f'{addr} authorized!')
                     while True:
                         data = conn.recv(1024)
                         if not data:
@@ -74,10 +113,10 @@ class TCPServer:
 
 
 class UDPServer:
-    def __init__(self, host: str, port: int, tcp_server: TCPServer) -> None:
+    def __init__(self, host: str, port: int) -> None:
         self.host = host
         self.port = port
-        self.tcp_server = tcp_server
+        self.connections: dict[int, socket.socket] = {}
 
 
     def run(self) -> None:
@@ -85,22 +124,29 @@ class UDPServer:
             s.bind((self.host, self.port))
             while True:
                 data, addr = s.recvfrom(1024)
-                print(data)
                 threading.Thread(target=self._handle_data, args=(s, data, addr)).start()
 
     def _handle_data(self, socket: socket.socket, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
 
-        print('Received message:', packet.payload, 'from', packet.auth_id)
+        logging.debug(f'Received message: {packet.payload} from {packet.auth_id}')
         socket.sendto(packet.serialize(), addr)
 
 
+class Server:
+    def __init__(self, host: str, tcp_port: int, udp_port: int) -> None:
+        self.tcp_server = TCPServer(host, tcp_port)
+        self.udp_server = UDPServer(host, udp_port)
+
+    def start(self) -> None:
+        threading.Thread(target=self.tcp_server.run, daemon=True).start()
+        threading.Thread(target=self.udp_server.run, daemon=True).start()
+
+
 if __name__ == "__main__":
-    tcp_server = TCPServer(settings.HOST, int(settings.TCP_PORT))
-    threading.Thread(target=tcp_server.run, daemon=True).start()
+    random.seed(69420)
 
-    udp_server = UDPServer(settings.HOST, int(settings.UDP_PORT), tcp_server)
-    threading.Thread(target=udp_server.run, daemon=True).start()
-
+    server = Server(settings.HOST, int(settings.TCP_PORT), int(settings.UDP_PORT))
+    server.start()
     while True:
         pass

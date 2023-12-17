@@ -5,6 +5,7 @@ from enum import auto, IntEnum
 class PacketType(IntEnum):
     JOIN_REQUEST = auto()
     JOIN_RESPONSE = auto()
+    MAP_DATA = auto()
     DISCONNECT = auto()
     MOVE = auto()
 
@@ -14,6 +15,7 @@ class PayloadFormat:
     JOIN_RESPONSE = struct.Struct('I')
     DISCONNECT = struct.Struct('I')
     MOVE = struct.Struct('II')
+    MAP_DATA = struct.Struct('576s')
 
 
 class DisconnectEnum(IntEnum):
