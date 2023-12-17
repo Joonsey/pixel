@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import socket
 import threading
@@ -16,12 +17,15 @@ class Connection:
     auth_id: int
     pos: tuple[float, float]
 
+    def update_pos(self, new_pos: tuple[float | int, float | int]) -> None:
+        self.pos = new_pos
+
 class TCPServer:
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self, host: str, port: int, parent: Server) -> None:
         self.host = host
         self.port = port
-        self.connections: dict[int, Connection] = {}
         self.map: list[list[str]]
+        self.connections = parent.connections
 
         self.map = self._generate_map()
 
@@ -113,10 +117,10 @@ class TCPServer:
 
 
 class UDPServer:
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(self, host: str, port: int, parent: Server) -> None:
         self.host = host
         self.port = port
-        self.connections: dict[int, socket.socket] = {}
+        self.connections = server.connections
 
 
     def run(self) -> None:
@@ -130,13 +134,19 @@ class UDPServer:
         packet = packets.Packet.deserialize(data)
 
         logging.debug(f'Received message: {packet.payload} from {packet.auth_id}')
+
+        if packet.packet_type == packets.PacketType.MOVE:
+            x, y = packets.PayloadFormat.MOVE.unpack(packet.payload)
+            self.connections[packet.auth_id].update_pos((float(x), float(y)))
+
         socket.sendto(packet.serialize(), addr)
 
 
 class Server:
     def __init__(self, host: str, tcp_port: int, udp_port: int) -> None:
-        self.tcp_server = TCPServer(host, tcp_port)
-        self.udp_server = UDPServer(host, udp_port)
+        self.connections: dict[int, Connection] = {}
+        self.tcp_server = TCPServer(host, tcp_port, self)
+        self.udp_server = UDPServer(host, udp_port, self)
 
     def start(self) -> None:
         threading.Thread(target=self.tcp_server.run, daemon=True).start()
