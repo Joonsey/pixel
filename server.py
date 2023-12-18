@@ -29,6 +29,9 @@ class TCPServer:
         self.connections = parent.connections
 
         self.map = self._generate_map()
+        self.running = True
+
+        self.stop = parent.stop
 
 
     def _generate_map(self) -> list[list[str]]:
@@ -60,10 +63,12 @@ class TCPServer:
 
 
     def _onboard_client(self, conn: socket.socket) -> None:
+        auth_id = list(filter(lambda x: x.socket == conn, self.connections.values()))[0].auth_id
+        logging.info(f"sending map data to {auth_id}")
         conn.send(
             packets.Packet(
                 packets.PacketType.MAP_DATA,
-                list(filter(lambda x: x.socket == conn, self.connections.values()))[0].auth_id,
+                auth_id,
                 packets.PayloadFormat.MAP_DATA.pack(self._get_map_data())
             ).serialize()
         )
@@ -96,7 +101,7 @@ class TCPServer:
 
 
     def handle_client(self, conn: socket.socket, addr: Any) -> None:
-        while True:
+        while self.running:
             try:
                 data = conn.recv(1024)
                 if not data:
@@ -119,7 +124,7 @@ class TCPServer:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind((self.host, self.port))
-                s.listen(20)
+                s.listen()
                 while True:
                     conn, addr = s.accept()
                     logging.info(f'connection request by {addr}')
@@ -131,9 +136,17 @@ class TCPServer:
 
                         logging.info(f'{addr} authorized!')
                         threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
+
+            except OSError as e:
+                s.close()
+
             finally:
                 self.disconnect_all_clients()
-                s.close()
+                self.stop()
+
+
+    def _stop(self) -> None:
+        self.running = False
 
 
 class UDPServer:
@@ -142,16 +155,20 @@ class UDPServer:
         self.port = port
         self.connections = parent.connections
 
+        self.running = True
+
+        self.stop = parent.stop
+
 
     def run(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             try:
                 s.bind((self.host, self.port))
-                while True:
+                while self.running:
                     data, addr = s.recvfrom(1024)
                     threading.Thread(target=self._handle_data, args=(s, data, addr), daemon=True).start()
             finally:
-                s.close()
+                self.stop()
 
     def _handle_data(self, socket: socket.socket, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
@@ -168,6 +185,10 @@ class UDPServer:
         socket.sendto(packet.serialize(), addr)
 
 
+    def _stop(self) -> None:
+        self.running = False
+
+
 class Server:
     def __init__(self, host: str, tcp_port: int, udp_port: int) -> None:
         self.connections: dict[int, Connection] = {}
@@ -177,6 +198,10 @@ class Server:
     def start(self) -> None:
         threading.Thread(target=self.tcp_server.run, daemon=True).start()
         threading.Thread(target=self.udp_server.run, daemon=True).start()
+
+    def stop(self) -> None:
+        self.udp_server._stop()
+        self.tcp_server._stop()
 
 
 if __name__ == "__main__":
