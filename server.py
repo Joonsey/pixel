@@ -16,6 +16,7 @@ class Connection:
     socket: socket.socket
     auth_id: int
     pos: tuple[float, float]
+    active: bool = True
 
     def update_pos(self, new_pos: tuple[float | int, float | int]) -> None:
         self.pos = new_pos
@@ -85,55 +86,80 @@ class TCPServer:
 
     def _disconnect_connection_by_auth_id(self, auth_id: int) -> None:
         logging.info(f'{auth_id} disconnected')
-        self.connections.pop(auth_id)
+        self.connections[auth_id].active = False
+        #self.connections.pop(auth_id)
 
 
-    def _handle_data(self, data: bytes) -> None:
-        packet = packets.Packet.deserialize(data)
+    def disconnect_all_clients(self) -> None:
+        for conn in self.connections.copy().values():
+            self._disconnect_connection_by_auth_id(conn.auth_id)
 
-        if packet.packet_type == packets.PacketType.DISCONNECT:
-            self._disconnect_connection_by_auth_id(packet.auth_id)
+
+    def handle_client(self, conn: socket.socket, addr: Any) -> None:
+        while True:
+            try:
+                data = conn.recv(1024)
+                if not data:
+                    break
+
+                packet = packets.Packet.deserialize(data)
+
+                if packet.packet_type == packets.PacketType.DISCONNECT:
+                    self._disconnect_connection_by_auth_id(packet.auth_id)
+
+            except OSError as e:
+                # should maybe try reconnecting automatically?
+                conn.close()
+                logging.info("connection is closed")
+                break
+
 
 
     def run(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((self.host, self.port))
-            s.listen()
-            while True:
-                conn, addr = s.accept()
-                logging.info(f'connection request by {addr}')
-                with conn:
-                    if not self._authenticate(conn):
-                        break
-
-                    self._onboard_client(conn)
-
-                    logging.info(f'{addr} authorized!')
-                    while True:
-                        data = conn.recv(1024)
-                        if not data:
+            try:
+                s.bind((self.host, self.port))
+                s.listen(20)
+                while True:
+                    conn, addr = s.accept()
+                    logging.info(f'connection request by {addr}')
+                    with conn:
+                        if not self._authenticate(conn):
                             break
-                        self._handle_data(data)
+
+                        self._onboard_client(conn)
+
+                        logging.info(f'{addr} authorized!')
+                        threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
+            finally:
+                self.disconnect_all_clients()
+                s.close()
 
 
 class UDPServer:
     def __init__(self, host: str, port: int, parent: Server) -> None:
         self.host = host
         self.port = port
-        self.connections = server.connections
+        self.connections = parent.connections
 
 
     def run(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.bind((self.host, self.port))
-            while True:
-                data, addr = s.recvfrom(1024)
-                threading.Thread(target=self._handle_data, args=(s, data, addr)).start()
+            try:
+                s.bind((self.host, self.port))
+                while True:
+                    data, addr = s.recvfrom(1024)
+                    threading.Thread(target=self._handle_data, args=(s, data, addr), daemon=True).start()
+            finally:
+                s.close()
 
     def _handle_data(self, socket: socket.socket, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
 
         logging.debug(f'Received message: {packet.payload} from {packet.auth_id}')
+        if packet.auth_id not in self.connections.keys():
+            logging.debug(f'unauthorized package from with auth_id: {packet.auth_id}')
+            return
 
         if packet.packet_type == packets.PacketType.MOVE:
             x, y = packets.PayloadFormat.MOVE.unpack(packet.payload)

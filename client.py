@@ -84,8 +84,11 @@ class Client:
             logging.info(f"got map data:\n{self.map}")
 
 
-    def _handle_udp(self, data: bytes, addr: Any) -> None:
+        if packet.packet_type == packets.PacketType.DISCONNECT:
+            self.disconnect(packets.DisconnectEnum.EXPECTED)
 
+
+    def _handle_udp(self, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
         #print(packet.auth_id, packet.payload)
 
@@ -135,7 +138,6 @@ class Client:
 
     def start(self) -> None:
         threading.Thread(target=self.tcp_connection, daemon=True).start()
-
 
 
 if __name__ == "__main__":
