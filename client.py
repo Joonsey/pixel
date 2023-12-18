@@ -1,8 +1,9 @@
-import os
+import pickle
 import socket
 import threading
 import random
 import logging
+import time
 from typing import Any, Optional
 
 import settings
@@ -18,13 +19,15 @@ class Client:
         self.udp_port = udp_port
         self.die: bool = False
         self.auth_id: int = 0
+        self.id: int = 0
         self.username = username
         self.map: list[list[str]]
-
+        self.others: dict[int, tuple[float, float]] = {}
+        self.entities: dict[int, tuple[float, float]] = {}
 
     @property
     def authenticated(self) -> bool:
-        return self.auth_id != 0 and self.udp_socket != None
+        return self.auth_id != 0 and self.udp_socket != None and self.id != 0
 
 
     def disconnect(self, disconnect_type: packets.DisconnectEnum = packets.DisconnectEnum.UNEXPECTED) -> None:
@@ -40,7 +43,6 @@ class Client:
 
 
     def _start_connection_and_authenticate(self, socket: socket.socket) -> bool:
-        socket.connect((self.host, self.tcp_port))
         socket.sendall(
             packets.Packet(
                 packets.PacketType.JOIN_REQUEST,
@@ -55,10 +57,12 @@ class Client:
         if packet.packet_type != packets.PacketType.JOIN_RESPONSE:
             return False
 
-        payload, = packets.PayloadFormat.JOIN_RESPONSE.unpack(packet.payload)
+        id, = packets.PayloadFormat.JOIN_RESPONSE.unpack(packet.payload)
 
-        if packet.packet_type == packets.PacketType.JOIN_RESPONSE and int(payload) != 0:
-            self.auth_id, = packets.PayloadFormat.JOIN_RESPONSE.unpack(packet.payload)
+        if packet.packet_type == packets.PacketType.JOIN_RESPONSE and int(id) != 0 and packet.auth_id != 0:
+            self.auth_id = packet.auth_id
+            self.id = id
+            logging.info(f'authenticated with auth_id {packet.auth_id} & id {id}')
             return True
 
         return False
@@ -81,29 +85,55 @@ class Client:
 
         if packet.packet_type == packets.PacketType.MAP_DATA:
             self.map = self._build_map_from_payload(packet.payload)
-            logging.info(f"got map data:\n{self.map}")
-
+            logging.debug(f"got map data:\n{self.map}")
 
         if packet.packet_type == packets.PacketType.DISCONNECT:
             self.disconnect(packets.DisconnectEnum.EXPECTED)
 
+        if packet.packet_type == packets.PacketType.INITIAL_DATA:
+            logging.info("loading initial data")
+            self.others = pickle.loads(packet.payload)
+            if self.id in self.others:
+                self.others.pop(self.id)
+
+        logging.debug(self.others)
 
     def _handle_udp(self, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
-        #print(packet.auth_id, packet.payload)
+        logging.debug(f"{packet.auth_id} | {packet.payload}")
+
+        if packet.packet_type == packets.PacketType.MOVE:
+            id, x, y = packets.PayloadFormat.MOVE.unpack(packet.payload)
+            logging.info(f'unpacked id %s, x %s, y %s', id, x, y)
+            if id == self.id:
+                return
+
+            if id not in self.others.keys():
+                logging.warning(f"move packet potentialy erronous! {id} was sendt but not found")
+
+            self.others[id] = (x, y)
+
+        if packet.packet_type == packets.PacketType.SYNC:
+            self.others = pickle.loads(packet.payload)
+            if self.id in self.others:
+                self.others.pop(self.id)
+
+        if packet.packet_type == packets.PacketType.SYNC_ENTITIES:
+            self.entities = pickle.loads(packet.payload)
 
 
     def _start_udp(self) -> None:
         def run():
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
 
-                logging.info("starting udp server")
+                logging.info("connecting through udp")
                 self.udp_socket = s
 
-                while True:
+                while not self.die:
                     data, addr = s.recvfrom(1024)
                     if not data:
                         self.die = True
+                        logging.info("dying")
                         break
 
                     self._handle_udp(data, addr)
@@ -121,13 +151,14 @@ class Client:
     def tcp_connection(self) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             self.tcp_socket = s
+            s.connect((self.host, self.tcp_port))
             if not self._start_connection_and_authenticate(s):
                 self.disconnect(packets.DisconnectEnum.EXPECTED)
                 return
 
             self._start_udp()
 
-            while True:
+            while not self.die:
                 data = s.recv(1024)
                 if not data:
                     self.die = True
@@ -146,13 +177,16 @@ if __name__ == "__main__":
     client.start()
     try:
         while True:
+            time.sleep(.5)
             if client.authenticated:
                 client.send_packet(
                     packets.Packet(
                         packets.PacketType.MOVE,
                         client.auth_id,
-                        packets.PayloadFormat.MOVE.pack(random.randint(0, 50), random.randint(0, 50))
+                        packets.PayloadFormat.MOVE.pack(client.id, random.randint(0, 50), random.randint(0, 50))
                 ))
+                logging.info(client.others)
+
     except KeyboardInterrupt as _:
         client.disconnect(packets.DisconnectEnum.EXPECTED)
 

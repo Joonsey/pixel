@@ -8,13 +8,16 @@ class PacketType(IntEnum):
     MAP_DATA = auto()
     DISCONNECT = auto()
     MOVE = auto()
+    INITIAL_DATA = auto()
+    SYNC = auto()
+    SYNC_ENTITIES = auto()
 
 
 class PayloadFormat:
     JOIN_REQUEST = struct.Struct('16s')
     JOIN_RESPONSE = struct.Struct('I')
     DISCONNECT = struct.Struct('I')
-    MOVE = struct.Struct('II')
+    MOVE = struct.Struct('III')
     MAP_DATA = struct.Struct('576s')
 
 

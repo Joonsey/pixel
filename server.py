@@ -1,9 +1,10 @@
 from __future__ import annotations
-import os
+import pickle
 import socket
 import threading
 import random
 import logging
+import copy
 
 from dataclasses import dataclass
 from typing import Any
@@ -14,7 +15,9 @@ import packets
 @dataclass
 class Connection:
     socket: socket.socket
+    addr: Any
     auth_id: int
+    id: int
     pos: tuple[float, float]
     active: bool = True
 
@@ -33,6 +36,8 @@ class TCPServer:
 
         self.stop = parent.stop
 
+        self._iota = 1
+
 
     def _generate_map(self) -> list[list[str]]:
         data = []
@@ -43,7 +48,12 @@ class TCPServer:
         return data
 
 
-    def _authenticate(self, conn: socket.socket) -> bool:
+    def _generate_id(self) -> int:
+        self._iota += 1
+        return self._iota
+
+
+    def _authenticate(self, conn: socket.socket, addr: Any) -> bool:
         response = conn.recv(1024)
 
         packet = packets.Packet.deserialize(response)
@@ -51,14 +61,15 @@ class TCPServer:
         if packet.packet_type != packets.PacketType.JOIN_REQUEST: return False
 
         auth_id = self._generate_auth_id()
+        id = self._generate_id()
         conn.send(
             packets.Packet(
                 packets.PacketType.JOIN_RESPONSE,
                 auth_id,
-                packets.PayloadFormat.JOIN_RESPONSE.pack(auth_id)
+                packets.PayloadFormat.JOIN_RESPONSE.pack(id)
             ).serialize()
         )
-        self.connections[auth_id] = Connection(conn, auth_id, (0,0))
+        self.connections[auth_id] = Connection(conn, addr, auth_id, id, (0,0))
         return True
 
 
@@ -73,11 +84,23 @@ class TCPServer:
             ).serialize()
         )
 
+        conn.send(
+            packets.Packet(
+                packets.PacketType.INITIAL_DATA,
+                auth_id,
+                pickle.dumps(self._get_initial_data())
+            ).serialize()
+        )
+
+    def _get_initial_data(self) -> dict[int, tuple[float, float]]:
+        temp_conns = list(filter(lambda x : x.active, self.connections.copy().values()))
+
+        return {x.id : x.pos for x in temp_conns}
+
 
     def _get_map_data(self) -> bytes:
         map_bytes = b"".join("".join(x).encode() for x in self.map)
         map_bytes = map_bytes.replace(b'\n', b'')
-        logging.info(map_bytes)
         return map_bytes
 
 
@@ -92,7 +115,7 @@ class TCPServer:
     def _disconnect_connection_by_auth_id(self, auth_id: int) -> None:
         logging.info(f'{auth_id} disconnected')
         self.connections[auth_id].active = False
-        #self.connections.pop(auth_id)
+        self.connections.pop(auth_id)
 
 
     def disconnect_all_clients(self) -> None:
@@ -115,7 +138,7 @@ class TCPServer:
             except OSError as e:
                 # should maybe try reconnecting automatically?
                 conn.close()
-                logging.info("connection is closed")
+                logging.error(f"connection is closed from {addr}")
                 break
 
 
@@ -129,7 +152,7 @@ class TCPServer:
                     conn, addr = s.accept()
                     logging.info(f'connection request by {addr}')
                     with conn:
-                        if not self._authenticate(conn):
+                        if not self._authenticate(conn, addr):
                             break
 
                         self._onboard_client(conn)
@@ -139,6 +162,7 @@ class TCPServer:
 
             except OSError as e:
                 s.close()
+                raise e
 
             finally:
                 self.disconnect_all_clients()
@@ -154,10 +178,53 @@ class UDPServer:
         self.host = host
         self.port = port
         self.connections = parent.connections
+        self.entities = parent.entities
 
         self.running = True
 
         self.stop = parent.stop
+
+
+    def _get_sync_data(self) -> dict[int, tuple[float, float]]:
+        temp_conns = list(filter(lambda x : x.active, self.connections.copy().values()))
+
+        return {x.id : x.pos for x in temp_conns}
+
+
+    def broadcast(self, socket: socket.socket, packet: packets.Packet) -> None:
+        for conn in self.connections.copy().values():
+            packet_copy = copy.copy(packet)
+            packet_copy.auth_id = conn.auth_id
+
+            socket.sendto(packet_copy.serialize(), conn.addr)
+            logging.info(f"broadcasting to {conn.addr} {conn.id} {conn.auth_id}")
+
+
+    def broadcast(self, socket: socket.socket, packet: packets.Packet, sender_auth_id: int, sender_addr: Any) -> None:
+        """
+
+        """
+        for conn in self.connections.copy().values():
+            packet.auth_id = conn.auth_id
+            socket.sendto(packet.serialize(), conn.addr)
+
+        packet.auth_id = sender_auth_id
+        socket.sendto(packet.serialize(), sender_addr)
+
+    def sync(self, socket: socket.socket, sender_auth_id: int, sender_addr: Any) -> None:
+        data = pickle.dumps(self._get_sync_data())
+        for conn in self.connections.copy().values():
+            logging.info(f"sending {self._get_sync_data()}")
+            pack = packets.Packet(
+                packets.PacketType.SYNC,
+                conn.auth_id,
+                data
+            )
+            socket.sendto(pack.serialize(), conn.addr)
+            logging.info(f"syncing to {conn.addr} {conn.id} {conn.auth_id}")
+
+        socket.sendto(packets.Packet(packets.PacketType.SYNC, sender_auth_id, data).serialize(), sender_addr)
+
 
 
     def run(self) -> None:
@@ -179,10 +246,23 @@ class UDPServer:
             return
 
         if packet.packet_type == packets.PacketType.MOVE:
-            x, y = packets.PayloadFormat.MOVE.unpack(packet.payload)
+            _, x, y = packets.PayloadFormat.MOVE.unpack(packet.payload)
             self.connections[packet.auth_id].update_pos((float(x), float(y)))
 
-        socket.sendto(packet.serialize(), addr)
+            # can switch to broadcast, worst-case
+            #self.broadcast(socket, packet)
+
+        self.broadcast(
+            socket,
+            packets.Packet(
+                packets.PacketType.SYNC,
+                0, # this doesnt matter. It gets overwritten
+                pickle.dumps(self._get_sync_data())
+            ),
+            packet.auth_id,
+            addr
+
+        )
 
 
     def _stop(self) -> None:
@@ -192,12 +272,15 @@ class UDPServer:
 class Server:
     def __init__(self, host: str, tcp_port: int, udp_port: int) -> None:
         self.connections: dict[int, Connection] = {}
+        self.entities: dict[int, tuple[float, float]] = {}
+
         self.tcp_server = TCPServer(host, tcp_port, self)
         self.udp_server = UDPServer(host, udp_port, self)
 
     def start(self) -> None:
         threading.Thread(target=self.tcp_server.run, daemon=True).start()
         threading.Thread(target=self.udp_server.run, daemon=True).start()
+        logging.info("threads running...")
 
     def stop(self) -> None:
         self.udp_server._stop()
@@ -209,5 +292,10 @@ if __name__ == "__main__":
 
     server = Server(settings.HOST, int(settings.TCP_PORT), int(settings.UDP_PORT))
     server.start()
-    while True:
-        pass
+    try:
+        while True:
+            pass
+    except:
+        logging.info("shutting down appropriatly")
+        server.stop()
+
