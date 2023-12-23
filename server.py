@@ -14,7 +14,6 @@ import packets
 
 @dataclass
 class Connection:
-    socket: socket.socket
     addr: Any
     auth_id: int
     id: int
@@ -33,6 +32,7 @@ class TCPServer:
 
         self.map = self._generate_map()
         self.running = True
+        self.dead = False
 
         self.stop = parent.stop
 
@@ -69,12 +69,12 @@ class TCPServer:
                 packets.PayloadFormat.JOIN_RESPONSE.pack(id)
             ).serialize()
         )
-        self.connections[auth_id] = Connection(conn, addr, auth_id, id, (0,0))
+        self.connections[auth_id] = Connection(addr, auth_id, id, (0,0))
         return True
 
 
-    def _onboard_client(self, conn: socket.socket) -> None:
-        auth_id = list(filter(lambda x: x.socket == conn, self.connections.values()))[0].auth_id
+    def _onboard_client(self, conn: socket.socket, addr: Any) -> None:
+        auth_id = list(filter(lambda x: x.addr == addr, self.connections.values()))[0].auth_id
         logging.info(f"sending map data to {auth_id}")
         conn.send(
             packets.Packet(
@@ -148,14 +148,14 @@ class TCPServer:
             try:
                 s.bind((self.host, self.port))
                 s.listen()
-                while True:
+                while self.running:
                     conn, addr = s.accept()
                     logging.info(f'connection request by {addr}')
                     with conn:
                         if not self._authenticate(conn, addr):
                             break
 
-                        self._onboard_client(conn)
+                        self._onboard_client(conn, addr)
 
                         logging.info(f'{addr} authorized!')
                         threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
@@ -167,6 +167,8 @@ class TCPServer:
             finally:
                 self.disconnect_all_clients()
                 self.stop()
+                logging.info("UDP server closing")
+                self.dead = True
 
 
     def _stop(self) -> None:
@@ -181,6 +183,7 @@ class UDPServer:
         self.entities = parent.entities
 
         self.running = True
+        self.dead = False
 
         self.stop = parent.stop
 
@@ -191,19 +194,13 @@ class UDPServer:
         return {x.id : x.pos for x in temp_conns}
 
 
-    def broadcast(self, socket: socket.socket, packet: packets.Packet) -> None:
-        for conn in self.connections.copy().values():
-            packet_copy = copy.copy(packet)
-            packet_copy.auth_id = conn.auth_id
-
-            socket.sendto(packet_copy.serialize(), conn.addr)
-            logging.info(f"broadcasting to {conn.addr} {conn.id} {conn.auth_id}")
-
-
-    def broadcast(self, socket: socket.socket, packet: packets.Packet, sender_auth_id: int, sender_addr: Any) -> None:
+    def broadcast(self, socket: socket.socket, packet_type: packets.PacketType, data: bytes, sender_auth_id: int, sender_addr: Any) -> None:
         """
-
+        send data to other clients via UDP
         """
+        logging.debug(f"broadcasting {data}")
+        packet = packets.Packet(packet_type=packet_type, auth_id=0, payload=data)
+
         for conn in self.connections.copy().values():
             packet.auth_id = conn.auth_id
             socket.sendto(packet.serialize(), conn.addr)
@@ -234,8 +231,11 @@ class UDPServer:
                 while self.running:
                     data, addr = s.recvfrom(1024)
                     threading.Thread(target=self._handle_data, args=(s, data, addr), daemon=True).start()
-            finally:
+            except:
                 self.stop()
+                logging.info("UDP server closing")
+                self.dead = True
+
 
     def _handle_data(self, socket: socket.socket, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
@@ -249,19 +249,13 @@ class UDPServer:
             _, x, y = packets.PayloadFormat.MOVE.unpack(packet.payload)
             self.connections[packet.auth_id].update_pos((float(x), float(y)))
 
-            # can switch to broadcast, worst-case
-            #self.broadcast(socket, packet)
 
         self.broadcast(
             socket,
-            packets.Packet(
-                packets.PacketType.SYNC,
-                0, # this doesnt matter. It gets overwritten
-                pickle.dumps(self._get_sync_data())
-            ),
+            packets.PacketType.SYNC,
+            pickle.dumps(self._get_sync_data()),
             packet.auth_id,
             addr
-
         )
 
 
@@ -277,14 +271,22 @@ class Server:
         self.tcp_server = TCPServer(host, tcp_port, self)
         self.udp_server = UDPServer(host, udp_port, self)
 
+
     def start(self) -> None:
         threading.Thread(target=self.tcp_server.run, daemon=True).start()
         threading.Thread(target=self.udp_server.run, daemon=True).start()
         logging.info("threads running...")
 
+
     def stop(self) -> None:
         self.udp_server._stop()
         self.tcp_server._stop()
+        self.stop_block()
+
+
+    def stop_block(self) -> None:
+        while not all([self.tcp_server.dead, self.udp_server.dead]):
+            pass
 
 
 if __name__ == "__main__":
@@ -296,6 +298,6 @@ if __name__ == "__main__":
         while True:
             pass
     except:
-        logging.info("shutting down appropriatly")
         server.stop()
+        logging.info("shutting down appropriatly")
 
