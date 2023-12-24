@@ -12,6 +12,7 @@ pygame.init()
 
 RESOLUTION = (1280, 720)
 FPS_TARGET = 60
+TILESIZE = 16
 
 
 class Player:
@@ -66,13 +67,32 @@ class Player:
         self.update_position(self.position.x + delta_x, self.position.y + delta_y)
 
         if broadcast_hook is not None and any([delta_x, delta_y]):
+            # sends broadcast hook if it is given, and if there is change in position
             broadcast_hook()
+
+
+class World:
+    def __init__(self) -> None:
+        self.world_data: list[list[str]]
+
+
+    def update_world_data(self, data: list[list[str]]) -> None:
+        self.world_data = data
+
+
+    def render(self, target_surf: pygame.surface.Surface) -> None:
+        for y, array in enumerate(self.world_data):
+            for x, tile in enumerate(array):
+                surf = pygame.surface.Surface((TILESIZE, TILESIZE))
+                surf.fill((233,13,34) if tile == "#" else (23,1,244))
+                target_surf.blit(surf, (x * TILESIZE, y * TILESIZE))
 
 
 class Game:
     def __init__(self) -> None:
         self.display = pygame.display.set_mode(RESOLUTION)
         self.player = Player()
+        self.world = World()
         self.client = client.Client(
             settings.HOST,
             settings.TCP_PORT,
@@ -124,9 +144,14 @@ class Game:
                 if event == pygame.QUIT:
                     self.running = False
 
+
+            if self.client.map_has_changed:
+                self.world.update_world_data(self.client.map)
+
             keys = pygame.key.get_pressed()
             self.player.handle_movement(keys, self.deltatime, self._send_position)
 
+            self.world.render(self.display)
             self.render_entities(self.other_players.copy())
             self.render_player()
 
@@ -139,3 +164,6 @@ if __name__ == "__main__":
         game.run()
     except KeyboardInterrupt:
         game.client.disconnect(packets.DisconnectEnum.EXPECTED)
+    except Exception as e:
+        game.client.disconnect()
+        raise e

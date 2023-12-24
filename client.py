@@ -25,6 +25,18 @@ class Client:
         self.others: dict[int, tuple[float, float]] = {}
         self.entities: dict[int, tuple[float, float]] = {}
 
+
+        self._map_has_changed = False
+
+
+    @property
+    def map_has_changed(self) -> bool:
+        if self._map_has_changed:
+            self._map_has_changed = False
+            return True
+        return False
+
+
     @property
     def authenticated(self) -> bool:
         return self.auth_id != 0 and self.udp_socket != None and self.id != 0
@@ -85,6 +97,7 @@ class Client:
 
         if packet.packet_type == packets.PacketType.MAP_DATA:
             self.map = self._build_map_from_payload(packet.payload)
+            self._map_has_changed = True
             logging.debug(f"got map data:\n{self.map}")
 
         if packet.packet_type == packets.PacketType.DISCONNECT:
@@ -114,7 +127,7 @@ class Client:
             self.others[id] = (x, y)
 
         if packet.packet_type == packets.PacketType.SYNC:
-            logging.info("RECIEVED SYNC PACKET")
+            logging.debug("RECIEVED SYNC PACKET")
             self.others = pickle.loads(packet.payload)
             if self.id in self.others:
                 self.others.pop(self.id)
