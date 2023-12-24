@@ -14,14 +14,16 @@ import packets
 
 @dataclass
 class Connection:
-    addr: Any
+    tcp_addr: Any
     auth_id: int
     id: int
     pos: tuple[float, float]
     active: bool = True
+    udp_addr: Any | None = None
 
     def update_pos(self, new_pos: tuple[float | int, float | int]) -> None:
         self.pos = new_pos
+
 
 class TCPServer:
     def __init__(self, host: str, port: int, parent: Server) -> None:
@@ -74,7 +76,7 @@ class TCPServer:
 
 
     def _onboard_client(self, conn: socket.socket, addr: Any) -> None:
-        auth_id = list(filter(lambda x: x.addr == addr, self.connections.values()))[0].auth_id
+        auth_id = list(filter(lambda x: x.tcp_addr == addr, self.connections.values()))[0].auth_id
         logging.info(f"sending map data to {auth_id}")
         conn.send(
             packets.Packet(
@@ -198,15 +200,22 @@ class UDPServer:
         """
         send data to other clients via UDP
         """
+
         logging.debug(f"broadcasting {data}")
         packet = packets.Packet(packet_type=packet_type, auth_id=0, payload=data)
 
         for conn in self.connections.copy().values():
+            if conn.udp_addr is None:
+                logging.error("a connection is unauthorized")
+                # send disconnect signal
+                return
+
             packet.auth_id = conn.auth_id
-            socket.sendto(packet.serialize(), conn.addr)
+            socket.sendto(packet.serialize(), conn.udp_addr)
 
         packet.auth_id = sender_auth_id
         socket.sendto(packet.serialize(), sender_addr)
+
 
     def sync(self, socket: socket.socket, sender_auth_id: int, sender_addr: Any) -> None:
         data = pickle.dumps(self._get_sync_data())
@@ -217,11 +226,10 @@ class UDPServer:
                 conn.auth_id,
                 data
             )
-            socket.sendto(pack.serialize(), conn.addr)
-            logging.info(f"syncing to {conn.addr} {conn.id} {conn.auth_id}")
+            socket.sendto(pack.serialize(), conn.tcp_addr)
+            logging.info(f"syncing to {conn.tcp_addr} {conn.id} {conn.auth_id}")
 
         socket.sendto(packets.Packet(packets.PacketType.SYNC, sender_auth_id, data).serialize(), sender_addr)
-
 
 
     def run(self) -> None:
@@ -236,9 +244,15 @@ class UDPServer:
                 logging.info("UDP server closing")
                 self.dead = True
 
+    def _onboard_client_udp_addr(self, packet: packets.Packet, addr) -> None:
+        self.connections[packet.auth_id].udp_addr = addr
+
 
     def _handle_data(self, socket: socket.socket, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
+
+        if self.connections[packet.auth_id].udp_addr is None:
+            self._onboard_client_udp_addr(packet, addr)
 
         logging.debug(f'Received message: {packet.payload} from {packet.auth_id}')
         if packet.auth_id not in self.connections.keys():

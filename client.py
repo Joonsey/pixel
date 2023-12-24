@@ -114,6 +114,7 @@ class Client:
             self.others[id] = (x, y)
 
         if packet.packet_type == packets.PacketType.SYNC:
+            logging.info("RECIEVED SYNC PACKET")
             self.others = pickle.loads(packet.payload)
             if self.id in self.others:
                 self.others.pop(self.id)
