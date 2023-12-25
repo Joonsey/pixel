@@ -2,8 +2,6 @@ from __future__ import annotations
 from typing import Callable
 import pygame
 
-import logging
-
 import client
 import settings
 import packets
@@ -63,29 +61,28 @@ class Player:
         delta_x = self.velocity[0] * self.speed * normalized_dt
         delta_y = self.velocity[1] * self.speed * normalized_dt
 
-
         self.update_position(self.position.x + delta_x, self.position.y + delta_y)
 
         if broadcast_hook is not None and any([delta_x, delta_y]):
-            # sends broadcast hook if it is given, and if there is change in position
+            # calls broadcast hook if it is given, and if there is change in position
             broadcast_hook()
 
 
 class World:
     def __init__(self) -> None:
-        self.world_data: list[list[str]]
+        self.world_data: list[list[str]] = []
 
 
     def update_world_data(self, data: list[list[str]]) -> None:
         self.world_data = data
 
 
-    def render(self, target_surf: pygame.surface.Surface) -> None:
+    def render(self, target_surf: pygame.surface.Surface, scroll: tuple[int, int]) -> None:
         for y, array in enumerate(self.world_data):
             for x, tile in enumerate(array):
                 surf = pygame.surface.Surface((TILESIZE, TILESIZE))
-                surf.fill((233,13,34) if tile == "#" else (23,1,244))
-                target_surf.blit(surf, (x * TILESIZE, y * TILESIZE))
+                surf.fill((11,13,34) if tile == "#" else (23,1,244))
+                target_surf.blit(surf, (x * TILESIZE - scroll[0], y * TILESIZE - scroll[1]))
 
 
 class Game:
@@ -103,6 +100,7 @@ class Game:
         self.deltatime = 0
         self.clock = pygame.time.Clock()
         self.running = True
+        self.scroll = (0,0)
 
 
     @property
@@ -126,13 +124,18 @@ class Game:
     def render_entities(self, entities: list[Player]) -> None:
         surf = pygame.surface.Surface((20, 20))
         surf.fill((0,0,255))
-        [self.display.blit(surf, entity.position) for entity in entities]
+        [self.display.blit(surf, self.scroll_compensation(entity.position)) for entity in entities]
+
+
+    def scroll_compensation(self, position: tuple | pygame.Vector2):
+        position = tuple(position)
+        return position[0] - self.scroll[0], position[1] - self.scroll[1]
 
 
     def render_player(self) -> None:
         surf = pygame.surface.Surface((20, 20))
         surf.fill((0,255,0))
-        self.display.blit(surf, self.player.position)
+        self.display.blit(surf, self.scroll_compensation(self.player.position))
 
 
     def run(self) -> None:
@@ -144,6 +147,10 @@ class Game:
                 if event == pygame.QUIT:
                     self.running = False
 
+            self.scroll = (
+                self.scroll[0] + (self.player.position.x - self.scroll[0] - (self.display.get_width() / 2)) / 10,
+                self.scroll[1] + (self.player.position.y - self.scroll[1] - (self.display.get_height() / 2)) / 10
+            )
 
             if self.client.map_has_changed:
                 self.world.update_world_data(self.client.map)
@@ -151,7 +158,7 @@ class Game:
             keys = pygame.key.get_pressed()
             self.player.handle_movement(keys, self.deltatime, self._send_position)
 
-            self.world.render(self.display)
+            self.world.render(self.display, self.scroll)
             self.render_entities(self.other_players.copy())
             self.render_player()
 

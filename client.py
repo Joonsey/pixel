@@ -111,6 +111,7 @@ class Client:
 
         logging.debug(self.others)
 
+
     def _handle_udp(self, data: bytes, addr: Any) -> None:
         packet = packets.Packet.deserialize(data)
         logging.debug(f"{packet.auth_id} | {packet.payload}")
