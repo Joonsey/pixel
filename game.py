@@ -8,14 +8,14 @@ import packets
 
 pygame.init()
 
-RESOLUTION = (1280, 720)
+RESOLUTION = 1280, 720
+RENDER_RESOLUTION = 540, 360
 FPS_TARGET = 60
-TILESIZE = 16
 
 
 class Player:
-    def __init__(self) -> None:
-        self.position = pygame.Vector2(0,0)
+    def __init__(self, x: int = 0, y: int = 0) -> None:
+        self.position = pygame.Vector2(x,y)
         self.velocity = [0.,.0]
         self.base_acceleration = .25
         self.acceleration = self.base_acceleration
@@ -77,18 +77,19 @@ class World:
         self.world_data = data
 
 
-    def render(self, target_surf: pygame.surface.Surface, scroll: tuple[int, int]) -> None:
+    def render(self, target_surf: pygame.surface.Surface, scroll: tuple[float, float]) -> None:
         for y, array in enumerate(self.world_data):
             for x, tile in enumerate(array):
-                surf = pygame.surface.Surface((TILESIZE, TILESIZE))
+                surf = pygame.surface.Surface((settings.TILESIZE, settings.TILESIZE))
                 surf.fill((11,13,34) if tile == "#" else (23,1,244))
-                target_surf.blit(surf, (x * TILESIZE - scroll[0], y * TILESIZE - scroll[1]))
+                target_surf.blit(surf, (x * settings.TILESIZE - scroll[0], y * settings.TILESIZE - scroll[1]))
 
 
 class Game:
     def __init__(self) -> None:
-        self.display = pygame.display.set_mode(RESOLUTION)
-        self.player = Player()
+        self.display = pygame.display.set_mode(settings.RESOLUTION)
+        self.surf = pygame.surface.Surface(settings.RENDER_RESOLUTION)
+        self.player = Player(120, 200)
         self.world = World()
         self.client = client.Client(
             settings.HOST,
@@ -124,7 +125,7 @@ class Game:
     def render_entities(self, entities: list[Player]) -> None:
         surf = pygame.surface.Surface((20, 20))
         surf.fill((0,0,255))
-        [self.display.blit(surf, self.scroll_compensation(entity.position)) for entity in entities]
+        [self.surf.blit(surf, self.scroll_compensation(entity.position)) for entity in entities]
 
 
     def scroll_compensation(self, position: tuple | pygame.Vector2):
@@ -135,21 +136,21 @@ class Game:
     def render_player(self) -> None:
         surf = pygame.surface.Surface((20, 20))
         surf.fill((0,255,0))
-        self.display.blit(surf, self.scroll_compensation(self.player.position))
+        self.surf.blit(surf, self.scroll_compensation(self.player.position))
 
 
     def run(self) -> None:
         self.client.start()
 
         while self.running:
-            self.deltatime = self.clock.tick(FPS_TARGET)
+            self.deltatime = self.clock.tick(settings.FPS_TARGET)
             for event in pygame.event.get():
                 if event == pygame.QUIT:
                     self.running = False
 
             self.scroll = (
-                self.scroll[0] + (self.player.position.x - self.scroll[0] - (self.display.get_width() / 2)) / 10,
-                self.scroll[1] + (self.player.position.y - self.scroll[1] - (self.display.get_height() / 2)) / 10
+                self.scroll[0] + (self.player.position.x - self.scroll[0] - (self.surf.get_width() / 2)) / 10,
+                self.scroll[1] + (self.player.position.y - self.scroll[1] - (self.surf.get_height() / 2)) / 10
             )
 
             if self.client.map_has_changed:
@@ -158,11 +159,16 @@ class Game:
             keys = pygame.key.get_pressed()
             self.player.handle_movement(keys, self.deltatime, self._send_position)
 
-            self.world.render(self.display, self.scroll)
+            self.world.render(self.surf, self.scroll)
             self.render_entities(self.other_players.copy())
             self.render_player()
 
+            resized_surf = pygame.transform.scale(self.surf, self.display.get_size())
+            self.display.blit(resized_surf, (0,0))
+
             pygame.display.flip()
+
+            self.surf.fill(0)
             self.display.fill(0)
 
 if __name__ == "__main__":
