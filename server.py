@@ -93,11 +93,13 @@ class TCPServer:
             ).serialize()
         )
 
+        data = pickle.dumps(self._get_initial_data())
+        logging.debug(f"onboarding client: {auth_id} with data: {data}")
         conn.send(
             packets.Packet(
                 packets.PacketType.INITIAL_DATA,
                 auth_id,
-                pickle.dumps(self._get_initial_data())
+                data
             ).serialize()
         )
 
@@ -210,7 +212,7 @@ class UDPServer:
         logging.debug(f"broadcasting {data}")
         packet = packets.Packet(packet_type=packet_type, auth_id=0, payload=data)
 
-        for conn in self.connections.copy().values():
+        for conn in list(filter(lambda x: x.active, self.connections.copy().values())):
             if conn.udp_addr is None:
                 logging.error("a connection is unauthorized")
                 # send disconnect signal

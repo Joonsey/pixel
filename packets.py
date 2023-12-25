@@ -22,6 +22,7 @@ class PayloadFormat:
     MOVE = struct.Struct('III')
     MAP_DATA = struct.Struct(f'{settings.MAP_LENGTH**2}s')
 
+
 if settings.MAP_LENGTH**2 > 1024: warning(f"map length is getting too large: {settings.MAP_LENGTH**2}")
 
 

@@ -21,7 +21,7 @@ class Player:
         self.base_acceleration = .25
         self.acceleration = self.base_acceleration
         self.max_velocity = .5
-        self.speed = 10
+        self.speed = 25
 
 
     @staticmethod
@@ -123,8 +123,8 @@ class Game:
             )))
 
 
-    def render_entities(self, entities: list[Player]) -> None:
-        surf = pygame.surface.Surface((20, 20))
+    def render_players(self, entities: list[Player]) -> None:
+        surf = pygame.surface.Surface((settings.TILESIZE, settings.TILESIZE))
         surf.fill((0,0,255))
         [self.surf.blit(surf, self.scroll_compensation(entity.position)) for entity in entities]
 
@@ -135,13 +135,15 @@ class Game:
 
 
     def render_player(self) -> None:
-        surf = pygame.surface.Surface((20, 20))
+        surf = pygame.surface.Surface((settings.TILESIZE, settings.TILESIZE))
         surf.fill((0,255,0))
         self.surf.blit(surf, self.scroll_compensation(self.player.position))
 
 
     def run(self) -> None:
         self.client.start()
+
+        self._send_position()
 
         while self.running:
             self.deltatime = self.clock.tick(settings.FPS_TARGET)
@@ -161,7 +163,7 @@ class Game:
             self.player.handle_movement(keys, self.deltatime, self._send_position)
 
             self.world.render(self.surf, self.scroll)
-            self.render_entities(self.other_players.copy())
+            self.render_players(self.other_players.copy())
             self.render_player()
 
             resized_surf = pygame.transform.scale(self.surf, self.display.get_size())
