@@ -50,6 +50,8 @@ class TCPServer:
         data = []
         with open('map', 'r') as f:
             for line in f.readlines():
+                # omitting 'commented' and empty lines
+                if line.startswith("/") or line == "": continue
                 data.append(line.split(','))
 
         return data
@@ -140,16 +142,17 @@ class TCPServer:
 
             if packet.packet_type == packets.PacketType.DISCONNECT:
                 self._disconnect_connection_by_auth_id(packet.auth_id)
+                break
 
 
     def run(self, is_recovery: bool = False) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
-                if is_recovery:
-                    logging.info("successfully recovered!")
                 self.socket = s
                 s.bind((self.host, self.port))
                 s.listen()
+                if is_recovery:
+                    logging.info("successfully recovered!")
                 while self.running:
                     conn, addr = s.accept()
                     logging.info(f'connection request by {addr}')

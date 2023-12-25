@@ -1,4 +1,6 @@
+from logging import warning
 import struct
+import settings
 from enum import auto, IntEnum
 
 
@@ -18,7 +20,9 @@ class PayloadFormat:
     JOIN_RESPONSE = struct.Struct('I')
     DISCONNECT = struct.Struct('I')
     MOVE = struct.Struct('III')
-    MAP_DATA = struct.Struct('576s')
+    MAP_DATA = struct.Struct(f'{settings.MAP_LENGTH**2}s')
+
+if settings.MAP_LENGTH**2 > 1024: warning(f"map length is getting too large: {settings.MAP_LENGTH**2}")
 
 
 class DisconnectEnum(IntEnum):

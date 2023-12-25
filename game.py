@@ -1,6 +1,7 @@
 from __future__ import annotations
-from typing import Callable
 import pygame
+
+from typing import Callable
 
 import client
 import settings
@@ -20,7 +21,7 @@ class Player:
         self.base_acceleration = .25
         self.acceleration = self.base_acceleration
         self.max_velocity = .5
-        self.speed = 55
+        self.speed = 10
 
 
     @staticmethod
@@ -170,6 +171,7 @@ class Game:
 
             self.surf.fill(0)
             self.display.fill(0)
+
 
 if __name__ == "__main__":
     game = Game()
