@@ -5,12 +5,16 @@ import threading
 import random
 import logging
 import copy
+import time
 
 from dataclasses import dataclass
 from typing import Any
 
 import settings
 import packets
+
+
+RECOVERY_DELAY = 2
 
 @dataclass
 class Connection:
@@ -27,6 +31,7 @@ class Connection:
 
 class TCPServer:
     def __init__(self, host: str, port: int, parent: Server) -> None:
+        self.socket: socket.socket
         self.host = host
         self.port = port
         self.map: list[list[str]]
@@ -126,28 +131,23 @@ class TCPServer:
 
 
     def handle_client(self, conn: socket.socket, addr: Any) -> None:
-        while self.running:
-            try:
-                data = conn.recv(1024)
-                if not data:
-                    break
-
-                packet = packets.Packet.deserialize(data)
-
-                if packet.packet_type == packets.PacketType.DISCONNECT:
-                    self._disconnect_connection_by_auth_id(packet.auth_id)
-
-            except OSError as e:
-                # should maybe try reconnecting automatically?
-                conn.close()
-                logging.error(f"connection is closed from {addr}")
+        while True:
+            data = conn.recv(1024)
+            if not data:
                 break
 
+            packet = packets.Packet.deserialize(data)
+
+            if packet.packet_type == packets.PacketType.DISCONNECT:
+                self._disconnect_connection_by_auth_id(packet.auth_id)
 
 
-    def run(self) -> None:
+    def run(self, is_recovery: bool = False) -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
+                if is_recovery:
+                    logging.info("successfully recovered!")
+                self.socket = s
                 s.bind((self.host, self.port))
                 s.listen()
                 while self.running:
@@ -163,17 +163,20 @@ class TCPServer:
                         threading.Thread(target=self.handle_client, args=(conn, addr), daemon=True).start()
 
             except OSError as e:
-                s.close()
-                raise e
+                logging.error(f"{e}")
+                logging.info(f"trying auto-recovery again in {RECOVERY_DELAY}s")
+                time.sleep(RECOVERY_DELAY)
+                self.run(is_recovery=True)
 
-            finally:
+            except Exception:
                 self.disconnect_all_clients()
                 self.stop()
-                logging.info("UDP server closing")
+                logging.info("TCP server closing")
                 self.dead = True
 
 
     def _stop(self) -> None:
+        self.socket.close()
         self.running = False
 
 
@@ -295,12 +298,6 @@ class Server:
     def stop(self) -> None:
         self.udp_server._stop()
         self.tcp_server._stop()
-        self.stop_block()
-
-
-    def stop_block(self) -> None:
-        while not all([self.tcp_server.dead, self.udp_server.dead]):
-            pass
 
 
 if __name__ == "__main__":
@@ -311,7 +308,12 @@ if __name__ == "__main__":
     try:
         while True:
             pass
-    except:
+    except KeyboardInterrupt:
+        logging.warning("kill signal")
         server.stop()
         logging.info("shutting down appropriatly")
+
+    except Exception as e:
+        server.stop()
+        raise e
 
