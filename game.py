@@ -4,6 +4,7 @@ import pygame
 from typing import Callable
 
 import client
+import entity
 import settings
 import packets
 
@@ -72,18 +73,32 @@ class Player:
 class World:
     def __init__(self) -> None:
         self.world_data: list[list[str]] = []
+        self.entites: list[entity.Entity] = []
 
 
     def update_world_data(self, data: list[list[str]]) -> None:
+        self.entites.clear()
         self.world_data = data
-
-
-    def render(self, target_surf: pygame.surface.Surface, scroll: tuple[float, float]) -> None:
         for y, array in enumerate(self.world_data):
             for x, tile in enumerate(array):
-                surf = pygame.surface.Surface((settings.TILESIZE, settings.TILESIZE))
-                surf.fill((11,13,34) if tile == "#" else (23,1,244))
-                target_surf.blit(surf, (x * settings.TILESIZE - scroll[0], y * settings.TILESIZE - scroll[1]))
+                if tile == "#":
+                    entity_tile = entity.Block(
+                        (x * settings.TILESIZE, y * settings.TILESIZE),
+                        settings.TILESIZE,
+                        settings.TILESIZE,
+                        pygame.color.Color(11,14,35))
+                else:
+                    entity_tile = entity.Block(
+                        (x * settings.TILESIZE, y * settings.TILESIZE),
+                        settings.TILESIZE,
+                        settings.TILESIZE,
+                        pygame.color.Color(24, 1, 244))
+
+                self.entites.append(entity_tile)
+
+    def render(self, target_surf: pygame.surface.Surface, scroll: tuple[float, float]) -> None:
+        for ent in self.entites:
+            ent.render(target_surf, scroll)
 
 
 class Game:
@@ -165,6 +180,7 @@ class Game:
             self.world.render(self.surf, self.scroll)
             self.render_players(self.other_players.copy())
             self.render_player()
+            print(self.player.position)
 
             resized_surf = pygame.transform.scale(self.surf, self.display.get_size())
             self.display.blit(resized_surf, (0,0))
